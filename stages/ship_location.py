@@ -1,72 +1,47 @@
-from http.client import responses
 import sys
+import random
 import pygame
-from typing import Tuple, List
+from typing import Optional, Tuple
 
 # Import client
 from networking.client import Client
 
 # Import GUI items
-from gui.grid import Grid
-from gui.label import Label
-from gui.button import Button
-from gui.dev_sign import DevSign
-from gui.map_widget import MapWidget
+from gui.fleet import Fleet, ShipModel, GRID_TILES, SHIP_SPECS
+from gui.battle_board import (
+    BLACK, SHIP, SHIP_EDGE, TITLE, GOOD, LINE,
+    TILE, GRID_PX, HEADER, LEFT_ORIGIN, RIGHT_ORIGIN,
+    draw_text, draw_grid, fill_tile, outline_ship, tile_at)
 
-# Import sprites
-from sprites.rescue_ship import RescueShip
-from sprites.battleship import Battleship
-from sprites.cruiser import Cruiser
-from sprites.destroyer import Destroyer
-from sprites.submarine import Submarine
+DOCK_TILE = 28
+DOCK_ROW = 40
 
 
 class ShipLocation:
-    """ This class manages Ship location stage. """
+    """
+      This class manages Ship location stage.
+
+      Same black look as the battle board: your grid on the left and a
+      dock with the 5 ships on the right. Drag ships onto the grid.
+    """
 
     def __init__(self) -> None:
         self.states = {
             'client': None,
-            'ship_locked': False,
-            'last_selected_ship': -1
+            'ship_locked': False
         }
 
-        self.map_widget = MapWidget(pos_x=73, pos_y=25)
-        self.ships, self.ships_rect = self.__create_ships()
-        self.gui_items = self.__load_gui_items()
+        self.fleet = Fleet()
+        self.locked = False
+        self.drag: Optional[dict] = None
 
-        # Color name: Little Greene French Grey Pale
-        self.background_color = (231, 231, 219)
+        px, py = RIGHT_ORIGIN
+        self.panel_rect = pygame.Rect(px, py, GRID_PX, GRID_PX)
+        btn_y = py + GRID_PX - 44
+        self.random_btn = pygame.Rect(px, btn_y, 165, 40)
+        self.lock_btn = pygame.Rect(px + 185, btn_y, 165, 40)
 
-    def handle_buttom_click(self, gui_btn: dict) -> bool:
-        """ This function handles button click event """
-        return gui_btn['enabled'] and gui_btn['item'].click()
-
-    def draw(self, window: pygame.display) -> None:
-        """ This function draws gui items on window. """
-
-        # Draw background
-        window.fill(self.background_color)
-
-        # Draw GUI items
-        for _, gui_item in self.gui_items.items():
-            if not gui_item['enabled']:
-                continue
-
-            if type(gui_item['item']) == list:
-                for item in gui_item['item']:
-                    item.draw(window)
-            else:
-                gui_item['item'].draw(window)
-
-        # Draw selected tile for current tab
-        if self.gui_items['tabs']['enabled']:
-            if self.map_widget.ally_map_selected:
-                self.map_widget.ally_map.draw_selected_tile(window)
-            else:
-                self.map_widget.enemy_map.draw_selected_tile(window)
-
-        pygame.display.update()
+    # ---------- stage api ----------
 
     def load_client(self, client: Client) -> None:
         """ This function loads connected client to current stage. """
@@ -89,17 +64,16 @@ class ShipLocation:
 
         return False
 
+    def get_fleet(self) -> Fleet:
+        """ This function returns the locked fleet. """
+        return self.fleet
+
     def lock_ships_position(self) -> None:
         """ This function notifies to server that a client locked ships. """
 
-        if self.states['client']:
-            self.ships = self.map_widget.ally_map.locate_ships_into_game_grid(
-                self.ships)
-            self.states['client'].lock_ships(
-                self.map_widget.ally_map.game_grid)
-
-            self.gui_items['conn_label']['enabled'] = True
-            self.gui_items['lock_ships']['enabled'] = False
+        if self.states['client'] and self.fleet.all_placed:
+            self.states['client'].lock_ships(self.fleet.to_grid())
+            self.locked = True
 
     def process_events(self) -> dict:
         """
@@ -119,163 +93,215 @@ class ShipLocation:
                 pygame.quit()
                 sys.exit()
 
-            if self.__ally_tab_selected():
-                self.gui_items['ships']['enabled'] = True
-                selected_ship = self.states['last_selected_ship']
+            if self.locked:
+                continue
 
-                selected_ship, dragging = self.__drag_and_drop_ship(
-                    event, self.map_widget.ally_map, selected_ship)
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                self.__mouse_down(event)
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                self.__mouse_up(event)
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_r:
+                self.__rotate_at(pygame.mouse.get_pos())
 
-                self.__enable_ship_rotation(
-                    self.map_widget.ally_map, selected_ship, dragging)
-
-                self.states['last_selected_ship'] = selected_ship
-            else:
-                self.gui_items['ships']['enabled'] = False
-
-        self.map_widget.handle_button_tabs_events()
-        if self.handle_buttom_click(self.gui_items['lock_ships']):
-            self.lock_ships_position()
-
-        if self.is_game_started():
+        if self.locked and self.is_game_started():
             self.states['ship_locked'] = True
 
         return self.states
 
-    def get_maps_and_ships(self) -> Tuple[MapWidget, list, List[pygame.Rect]]:
-        """ This function returns map widget and ships """
-        return self.map_widget, self.ships, self.ships_rect
+    # ---------- mouse handling ----------
 
-    def __load_gui_items(self) -> dict:
-        """
-          This function creates and loads gui items
-          used in stage.
-        """
+    def __mouse_down(self, event: pygame.event.Event) -> None:
+        if event.button == 3:
+            self.__rotate_at(event.pos)
+            return
+        if event.button != 1 or self.drag:
+            return
 
-        sign = DevSign(pos_x=325, pos_y=475)
-        lock_ships = Button(
-            text='Lock ships',
-            pos_x=190,
-            pos_y=430,
-            width=110,
-            height=40
-        )
-        conn_label = Label(pos_x=130, pos_y=430,
-                           text='Waiting for confirmation...')
+        if self.random_btn.collidepoint(event.pos):
+            self.fleet.randomize(random)
+            return
+        if self.lock_btn.collidepoint(event.pos) and self.fleet.all_placed:
+            self.lock_ships_position()
+            return
 
-        gui_items = {
-            'lock_ships': {
-                'enabled': True,
-                'item': lock_ships
-            },
-            'tabs': {
-                'enabled': True,
-                'item': self.map_widget
-            },
-            'ships': {
-                'enabled': True,
-                'item': self.ships
-            },
-            'dev_sign': {
-                'enabled': True,
-                'item': sign
-            },
-            'conn_label': {
-                'enabled': False,
-                'item': conn_label
+        ship, index = self.__pick(event.pos)
+        if ship:
+            self.drag = {
+                'ship': ship,
+                'index': index,
+                'prev': (ship.x, ship.y, ship.horizontal, ship.placed),
             }
-        }
+            ship.placed = False  # lifted from the grid while dragging
 
-        return gui_items
+    def __mouse_up(self, event: pygame.event.Event) -> None:
+        if not self.drag:
+            return
 
-    def __ally_tab_selected(self) -> bool:
-        """ This function checks if ally tab is selected. """
-        return (self.gui_items['tabs']['enabled'] and
-                self.gui_items['tabs']['item'].ally_map_selected)
+        ship, index = self.drag['ship'], self.drag['index']
+        tile = tile_at(LEFT_ORIGIN, event.pos)
 
-    def __drag_and_drop_ship(
-            self,
-            event: pygame.event.Event,
-            grid: Grid,
-            selected_ship: int) -> Tuple[int, bool]:
-        """
-          This function handles required mouse events to drag and
-          drop ships over grid.
-        """
+        if tile:
+            x, y = self.__anchor(tile, index, ship.horizontal)
+            if self.fleet.can_place(ship, x, y, ship.horizontal):
+                self.fleet.place(ship, x, y, ship.horizontal)
+            else:
+                self.__restore(ship)
+        elif self.panel_rect.collidepoint(event.pos):
+            self.fleet.unplace(ship)  # dropped back on the dock
+        else:
+            self.__restore(ship)
 
-        dragging = False
+        self.drag = None
 
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            mouse_rect = pygame.Rect(event.pos, (1, 1))
-            selected_ship = mouse_rect.collidelist(self.ships_rect)
+    def __restore(self, ship: ShipModel) -> None:
+        ship.x, ship.y, ship.horizontal, ship.placed = self.drag['prev']
 
-        if event.type == pygame.MOUSEMOTION:
-            if event.buttons[0]:
-                dragging = True
-                if self.__valid_ship_index(selected_ship):
-                    self.ships[selected_ship].move_ship(
-                        event.rel, grid, self.ships_rect)
-                    self.ships_rect[selected_ship] = self.ships[selected_ship].rect
+    def __pick(self, pos) -> Tuple[Optional[ShipModel], int]:
+        """ Ship under the mouse, and which of its tiles was grabbed. """
 
-        if event.type == pygame.MOUSEBUTTONUP:
-            if self.__valid_ship_index(selected_ship):
-                self.ships[selected_ship].dragged_ship_position(grid)
-                self.ships_rect[selected_ship] = self.ships[selected_ship].rect
+        tile = tile_at(LEFT_ORIGIN, pos)
+        if tile:
+            ship = self.fleet.ship_at(tile)
+            if ship:
+                return ship, ship.cells().index(tile)
 
-        return selected_ship, dragging
+        for i, ship in enumerate(self.fleet.ships):
+            rect = self.__dock_rect(i)
+            if not ship.placed and rect.collidepoint(pos):
+                return ship, min((pos[0] - rect.x) // DOCK_TILE, ship.size - 1)
 
-    def __enable_ship_rotation(
-            self,
-            grid: Grid,
-            selected_ship: int,
-            dragging: bool) -> None:
-        """ This function enables rotation button to selected ship. """
+        return None, 0
 
-        last_selected_ship = self.states['last_selected_ship']
+    def __anchor(self, tile, index, horizontal) -> Tuple[int, int]:
+        """ Top-left tile of a ship grabbed at `index` and dropped on `tile`. """
+        if horizontal:
+            return tile[0] - index, tile[1]
+        return tile[0], tile[1] - index
 
-        # Check if selected ship rotation button can be drawed
-        if self.__valid_ship_index(selected_ship) and not dragging:
-            self.ships[selected_ship].can_draw_button = True
+    def __rotate_at(self, pos) -> None:
+        """ Rotate the dragged ship, or the placed ship under the mouse. """
 
-            if last_selected_ship != selected_ship:
-                self.ships[last_selected_ship].can_draw_button = False
+        if self.drag:
+            ship = self.drag['ship']
+            ship.horizontal = not ship.horizontal
+            return
 
-            if self.ships[selected_ship].rotate_button_click():
-                self.ships[selected_ship].rotate_ship(grid, self.ships_rect)
-                self.ships_rect[selected_ship] = self.ships[selected_ship].rect
-        elif self.__valid_ship_index(last_selected_ship):
-            self.ships[last_selected_ship].can_draw_button = False
+        tile = tile_at(LEFT_ORIGIN, pos)
+        ship = self.fleet.ship_at(tile) if tile else None
+        if not ship:
+            return
 
-    def __create_ships(self) -> Tuple[list, list]:
-        """
-          This function creates all ships and return two list
-          refering to them and their rects.
-        """
-
-        new_rescue_ship = RescueShip(88, 266)
-        new_battleship = Battleship(129, 164)
-        new_cruiser = Cruiser(197, 156)
-        new_destroyer = Destroyer(262, 154)
-        new_submarine = Submarine(319, 165)
-
-        ships = [
-            new_rescue_ship,
-            new_battleship,
-            new_cruiser,
-            new_destroyer,
-            new_submarine
+        horizontal = not ship.horizontal
+        # Same origin first, then pulled back inside the grid
+        candidates = [
+            (ship.x, ship.y),
+            (min(ship.x, GRID_TILES - ship.size) if horizontal else ship.x,
+             ship.y if horizontal else min(ship.y, GRID_TILES - ship.size)),
         ]
+        for x, y in candidates:
+            if self.fleet.can_place(ship, x, y, horizontal):
+                self.fleet.place(ship, x, y, horizontal)
+                return
 
-        ships_rect = [
-            new_rescue_ship.collision_rect,
-            new_battleship.collision_rect,
-            new_cruiser.collision_rect,
-            new_destroyer.collision_rect,
-            new_submarine.collision_rect
-        ]
+    # ---------- drawing ----------
 
-        return ships, ships_rect
+    def __dock_rect(self, index: int) -> pygame.Rect:
+        ship = self.fleet.ships[index]
+        return pygame.Rect(RIGHT_ORIGIN[0] + 10,
+                           HEADER + 12 + index * DOCK_ROW,
+                           ship.size * DOCK_TILE, DOCK_TILE)
 
-    def __valid_ship_index(self, selected_ship: int) -> bool:
-        """ This function checks if selected_ship is a valid index """
-        return 0 <= selected_ship < len(self.ships)
+    def draw(self, window: pygame.display) -> None:
+        """ This function draws the black ship location screen. """
+
+        window.fill(BLACK)
+
+        draw_text(window, 'YOUR FLEET', (LEFT_ORIGIN[0], HEADER - 24))
+        draw_text(window, 'SHIPS', (RIGHT_ORIGIN[0], HEADER - 24))
+
+        draw_grid(window, LEFT_ORIGIN)
+        for ship in self.fleet.ships:
+            if ship.placed:
+                for cell in ship.cells():
+                    fill_tile(window, LEFT_ORIGIN, cell, SHIP)
+                outline_ship(window, LEFT_ORIGIN, ship.cells(), SHIP_EDGE, 2)
+
+        if self.drag:
+            self.__draw_drag(window)
+
+        self.__draw_dock(window)
+        self.__draw_footer(window)
+
+        pygame.display.update()
+
+    def __draw_drag(self, window) -> None:
+        ship, index = self.drag['ship'], self.drag['index']
+        mouse = pygame.mouse.get_pos()
+        tile = tile_at(LEFT_ORIGIN, mouse)
+
+        if tile:
+            x, y = self.__anchor(tile, index, ship.horizontal)
+            valid = self.fleet.can_place(ship, x, y, ship.horizontal)
+            color = (40, 140, 70) if valid else (170, 40, 40)
+            for cx, cy in ship.cells(x, y, ship.horizontal):
+                if 0 <= cx < GRID_TILES and 0 <= cy < GRID_TILES:
+                    fill_tile(window, LEFT_ORIGIN, (cx, cy), color)
+        else:
+            # Floating ship following the cursor
+            for k in range(ship.size):
+                offset = (k - index) * TILE
+                cx = mouse[0] - TILE // 2 + (offset if ship.horizontal else 0)
+                cy = mouse[1] - TILE // 2 + (0 if ship.horizontal else offset)
+                pygame.draw.rect(window, SHIP_EDGE,
+                                 (cx + 3, cy + 3, TILE - 6, TILE - 6))
+
+    def __draw_dock(self, window) -> None:
+        dragged = self.drag['ship'] if self.drag else None
+
+        for i, ship in enumerate(self.fleet.ships):
+            rect = self.__dock_rect(i)
+            in_dock = not ship.placed and ship is not dragged
+
+            for k in range(ship.size):
+                cell = pygame.Rect(rect.x + k * DOCK_TILE, rect.y,
+                                   DOCK_TILE, DOCK_TILE).inflate(-4, -4)
+                if in_dock:
+                    pygame.draw.rect(window, SHIP, cell)
+                else:
+                    pygame.draw.rect(window, LINE, cell, 1)
+
+            label_color = TITLE if in_dock else (90, 90, 90)
+            draw_text(window, f'{ship.label} ({ship.size})',
+                      (RIGHT_ORIGIN[0] + 10 + 5 * DOCK_TILE + 14, rect.y + 5),
+                      color=label_color)
+
+        hint_y = HEADER + 12 + len(self.fleet.ships) * DOCK_ROW + 16
+        if not self.locked:
+            draw_text(window, 'Drag ships onto your grid', (RIGHT_ORIGIN[0], hint_y))
+            draw_text(window, 'Right-click or R to rotate', (RIGHT_ORIGIN[0], hint_y + 24))
+
+        self.__draw_button(window, self.random_btn, 'Random',
+                           enabled=not self.locked)
+        self.__draw_button(window, self.lock_btn, 'Lock ships',
+                           enabled=self.fleet.all_placed and not self.locked,
+                           highlight=True)
+
+    def __draw_button(self, window, rect, text, enabled, highlight=False) -> None:
+        color = (GOOD if highlight else TITLE) if enabled else (80, 80, 80)
+        pygame.draw.rect(window, color, rect, 2, border_radius=4)
+        draw_text(window, text, (0, rect.y + 10), size=16, color=color,
+                  center_x=rect.centerx)
+
+    def __draw_footer(self, window) -> None:
+        y = HEADER + GRID_PX + 10
+        if self.locked:
+            draw_text(window, 'Ships locked. Waiting for opponent...',
+                      (LEFT_ORIGIN[0], y), size=16, color=GOOD)
+        else:
+            count = self.fleet.placed_count
+            draw_text(window, f'Ships placed: {count}/{len(SHIP_SPECS)}',
+                      (LEFT_ORIGIN[0], y), size=16,
+                      color=GOOD if self.fleet.all_placed else TITLE)
+            if self.fleet.all_placed:
+                draw_text(window, 'Press "Lock ships" when ready.',
+                          (LEFT_ORIGIN[0], y + 28))

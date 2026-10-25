@@ -5,6 +5,7 @@ from stages.intro import Intro
 from stages.battle import Battle
 from stages.ship_location import ShipLocation
 from stages.podium import Podium
+from gui.battle_board import BOARD_WIDTH, BOARD_HEIGHT
 
 
 FPS = 30
@@ -13,11 +14,18 @@ WIN = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption('Battleship')
 
 
+def set_window_size(width: int, height: int) -> None:
+    """ Resize the window: ship location and battle use the wide black board. """
+    global WIN
+    WIN = pygame.display.set_mode((width, height))
+
+
 class GameState:
     """
-      This class manages game states in a way to modularize
-      stages and keep codebase organized.
-      Resource: https://www.youtube.com/watch?v=j9yMFG3D7fg
+    This class manages game states in a way to modularize
+    stages and keep codebase organized.
+
+    Resource: https://www.youtube.com/watch?v=j9yMFG3D7fg
     """
 
     def __init__(self) -> None:
@@ -39,14 +47,13 @@ class GameState:
                 self.state = 'ship_location'
                 self.client = states['client']
 
+                set_window_size(BOARD_WIDTH, BOARD_HEIGHT)
                 self.ship_location_stage = ShipLocation()
                 self.ship_location_stage.load_client(self.client)
-
                 self.intro_stage = None
-
-        except ConnectionRefusedError: 
+        except ConnectionRefusedError:
             print("Could not connect to server.")
-            if self.intro_stage: 
+            if self.intro_stage:
                 self.intro_stage.status_message = "Connection failed. Please check server."
 
     def ship_location(self) -> None:
@@ -57,13 +64,10 @@ class GameState:
 
         if states['ship_locked']:
             self.state = 'battle'
-            map_widget, ships, ships_rect = self.ship_location_stage.get_maps_and_ships()
 
             self.battle_stage = Battle()
             self.battle_stage.load_client(self.client)
-            self.battle_stage.load_maps_and_ships(
-                map_widget, ships, ships_rect)
-
+            self.battle_stage.load_fleet(self.ship_location_stage.get_fleet())
             self.ship_location_stage = None
 
     def battle(self) -> None:
@@ -74,11 +78,11 @@ class GameState:
 
         if states['game_finished']:
             self.state = 'podium'
+            set_window_size(WIDTH, HEIGHT)
 
             self.podium_stage = Podium()
             self.podium_stage.load_client(self.client)
             self.podium_stage.load_winner_name(states['winner_name'])
-
             self.battle_stage = None
 
     def podium(self) -> None:
@@ -90,9 +94,9 @@ class GameState:
         if states['reset_game']:
             self.state = 'ship_location'
 
+            set_window_size(BOARD_WIDTH, BOARD_HEIGHT)
             self.ship_location_stage = ShipLocation()
             self.ship_location_stage.load_client(self.client)
-
             self.podium_stage = None
 
     def state_manager(self) -> None:
