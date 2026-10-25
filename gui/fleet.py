@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Set, Tuple
 Tile = Tuple[int, int]
 
 # Board is GRID_TILES x GRID_TILES
-GRID_TILES = 7
+GRID_TILES = 10
 
 # (server letter, display name, size)
 SHIP_SPECS = [

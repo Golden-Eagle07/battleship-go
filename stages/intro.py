@@ -18,9 +18,15 @@ class Intro:
     def __init__(self) -> None:
         self.states = {
             'client': None,
-            'players_connected': False
+            'players_connected': False,
+            'open_replay': False,
+            'username': ''
         }
         self.gui_items = self.__load_gui_items()
+
+        # Ignore menu clicks until this time (ms) so the click that opened
+        # the menu is not also read as a click on a menu button.
+        self.menu_ready_at = 0
 
         # Color name: Little Greene French Grey Pale
         self.background_color = (231, 231, 219)
@@ -47,6 +53,27 @@ class Intro:
                 gui_item['item'].draw(window)
 
         pygame.display.update()
+
+    def get_username(self) -> str:
+        return self.gui_items['username_input']['item'].get_text().strip()
+
+    def handle_continue(self) -> None:
+        """
+          Continue button: show the menu (Start new game / Replay).
+        """
+
+        if not self.get_username():
+            self.gui_items['conn_label']['item'].change_text(
+                'Enter a username first')
+            self.gui_items['conn_label']['item'].move_label((13, 0))
+            return
+
+        self.gui_items['start_button']['enabled'] = False
+        self.gui_items['new_game_button']['enabled'] = True
+        self.gui_items['replay_button']['enabled'] = True
+        self.menu_ready_at = pygame.time.get_ticks() + 400
+        self.gui_items['conn_label']['item'].change_text('Choose an option')
+        self.gui_items['conn_label']['item'].move_label((13, 0))
 
     def connect_to_server(self) -> None:
         """ This function creates a client to connect to game server. """
@@ -78,6 +105,8 @@ class Intro:
                 self.gui_items['conn_label']['item'].change_text(
                     'Waiting for player...')
                 self.gui_items['start_button']['enabled'] = False
+                self.gui_items['new_game_button']['enabled'] = False
+                self.gui_items['replay_button']['enabled'] = False
             else:
                 label_offset = (13, 0)
                 self.gui_items['conn_label']['item'].change_text(
@@ -135,7 +164,15 @@ class Intro:
                 self.gui_items['port_input']['item'].handle_input_events(event)
 
         if self.handle_buttom_click(self.gui_items['start_button']):
-            self.connect_to_server()
+            self.handle_continue()
+
+        if pygame.time.get_ticks() >= self.menu_ready_at:
+            if self.handle_buttom_click(self.gui_items['new_game_button']):
+                self.connect_to_server()
+
+            if self.handle_buttom_click(self.gui_items['replay_button']):
+                self.states['username'] = self.get_username()
+                self.states['open_replay'] = True
 
         if self.all_players_connected():
             self.states['players_connected'] = True
@@ -150,10 +187,24 @@ class Intro:
 
         sign = DevSign(pos_x=325, pos_y=475)
         start_button = Button(
-            text='Start game',
+            text='Continue',
             pos_x=187,
             pos_y=360,
             width=120,
+            height=40
+        )
+        new_game_button = Button(
+            text='Start new game',
+            pos_x=110,
+            pos_y=360,
+            width=135,
+            height=40
+        )
+        replay_button = Button(
+            text='Replay',
+            pos_x=255,
+            pos_y=360,
+            width=135,
             height=40
         )
         title_label = Label(
@@ -223,6 +274,14 @@ class Intro:
             'start_button': {
                 'enabled': True,
                 'item': start_button
+            },
+            'new_game_button': {
+                'enabled': False,
+                'item': new_game_button
+            },
+            'replay_button': {
+                'enabled': False,
+                'item': replay_button
             },
         }
 

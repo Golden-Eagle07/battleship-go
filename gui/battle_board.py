@@ -6,7 +6,7 @@ from gui.fleet import Fleet, ShipModel, GRID_TILES, SHIP_INFO, SHIP_SPECS
 Tile = Tuple[int, int]
 
 # ---------- layout ----------
-TILE = 50
+TILE = 40
 GRID_PX = TILE * GRID_TILES
 
 MARGIN = 30

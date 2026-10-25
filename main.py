@@ -6,6 +6,7 @@ from stages.battle import Battle
 from stages.ship_location import ShipLocation
 from stages.podium import Podium
 from gui.battle_board import BOARD_WIDTH, BOARD_HEIGHT
+from stages.replay import Replay
 
 
 FPS = 30
@@ -15,7 +16,7 @@ pygame.display.set_caption('Battleship')
 
 
 def set_window_size(width: int, height: int) -> None:
-    """ Resize the window: ship location and battle use the wide black board. """
+    """ Resize the window: ship location, battle and replay use the wide black board. """
     global WIN
     WIN = pygame.display.set_mode((width, height))
 
@@ -35,19 +36,22 @@ class GameState:
         self.ship_location_stage: ShipLocation = None
         self.battle_stage: Battle = None
         self.podium_stage: Podium = Podium()
+        self.replay_stage: Replay = None
 
     def intro(self) -> None:
         """ Intro stage state handler. """
-
         try:
             states = self.intro_stage.process_events()
             self.intro_stage.draw(WIN)
 
-            if states['players_connected']:
+            if states['open_replay']:
+                self.state = 'replay'
+                set_window_size(BOARD_WIDTH, BOARD_HEIGHT)  # before Replay()
+                self.replay_stage = Replay(states['username'])
+            elif states['players_connected']:
                 self.state = 'ship_location'
-                self.client = states['client']
-
                 set_window_size(BOARD_WIDTH, BOARD_HEIGHT)
+                self.client = states['client']
                 self.ship_location_stage = ShipLocation()
                 self.ship_location_stage.load_client(self.client)
                 self.intro_stage = None
@@ -55,6 +59,18 @@ class GameState:
             print("Could not connect to server.")
             if self.intro_stage:
                 self.intro_stage.status_message = "Connection failed. Please check server."
+
+    def replay(self) -> None:
+        """ Replay stage state handler. """
+
+        states = self.replay_stage.process_events()
+        self.replay_stage.draw(WIN)
+
+        if states['exit']:
+            self.intro_stage.states['open_replay'] = False
+            self.replay_stage = None
+            self.state = 'intro'
+            set_window_size(WIDTH, HEIGHT)
 
     def ship_location(self) -> None:
         """ Ship location stage state handler. """
@@ -110,6 +126,8 @@ class GameState:
             self.battle()
         elif self.state == 'podium':
             self.podium()
+        elif self.state == 'replay':
+            self.replay()
 
 
 def main() -> None:
